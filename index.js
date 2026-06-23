@@ -14,6 +14,7 @@ const {
   TextInputStyle,
 } = require("discord.js");
 
+
 const http = require("http");
 http
   .createServer((_, res) => {
@@ -23,6 +24,7 @@ http
   .listen(process.env.PORT || 3000, "0.0.0.0", () => {
     console.log(`HTTP server listening on ${process.env.PORT || 3000}`);
   });
+
 
 // --- CONFIG ---
 const TOKEN = process.env.BOT_TOKEN;
@@ -42,6 +44,13 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
   ],
 });
+
+const SELF_URL = process.env.RENDER_EXTERNAL_URL;
+if (SELF_URL) {
+  setInterval(() => {
+  http.get(SELF_URL).on("error", () => {});
+  }, 4 * 60 * 1000);
+}
 
 // ——— Register slash command on ready ———
 client.once("ready", async () => {
