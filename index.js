@@ -14,6 +14,16 @@ const {
   TextInputStyle,
 } = require("discord.js");
 
+const http = require("http");
+http
+  .createServer((_, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Bot is alive");
+  })
+  .listen(process.env.PORT || 3000, "0.0.0.0", () => {
+    console.log(`HTTP server listening on ${process.env.PORT || 3000}`);
+  });
+
 // --- CONFIG ---
 const TOKEN = process.env.BOT_TOKEN;
 const APP_CHANNEL_ID = process.env.APPLICATION_CHANNEL_ID;
