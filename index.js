@@ -14,17 +14,7 @@ const {
   TextInputStyle,
 } = require("discord.js");
 
-
 const http = require("http");
-http
-  .createServer((_, res) => {
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Bot is alive");
-  })
-  .listen(process.env.PORT || 3000, "0.0.0.0", () => {
-    console.log(`HTTP server listening on ${process.env.PORT || 3000}`);
-  });
-
 
 // --- CONFIG ---
 const TOKEN = process.env.BOT_TOKEN;
@@ -34,25 +24,82 @@ const AUTHORIZED_ROLE_IDS = [
   "1387903334744064173", // Owner role
 ];
 
+// ====== DRIVER COUNT CONFIG (new) ======
+const GUILD_ID = "1387897307361575215";
+const DRIVER_ROLE_ID = "1387898569779839127";
+const TRAINEE_ROLE_ID = "1431731010810413157";
+
+let driverCountCache = {
+  drivers: 0,
+  trainees: 0,
+  total: 0,
+  updated: null,
+};
+
+async function refreshDriverCount() {
+  try {
+    const guild = client.guilds.cache.get(GUILD_ID);
+    if (!guild) {
+      console.warn("[drivers] Guild not in cache, skipping refresh");
+      return;
+    }
+    // Pull all members so role.members is fully populated
+    await guild.members.fetch();
+
+    const driverRole = guild.roles.cache.get(DRIVER_ROLE_ID);
+    const traineeRole = guild.roles.cache.get(TRAINEE_ROLE_ID);
+    const drivers = driverRole ? driverRole.members.size : 0;
+    const trainees = traineeRole ? traineeRole.members.size : 0;
+
+    driverCountCache = {
+      drivers,
+      trainees,
+      total: drivers + trainees,
+      updated: new Date().toISOString(),
+    };
+    console.log(
+      `[drivers] Refreshed: ${drivers} drivers, ${trainees} trainees`
+    );
+  } catch (err) {
+    console.error("[drivers] Refresh failed:", err);
+  }
+}
+
+// ====== HTTP SERVER ======
+// Health check + /drivers.json endpoint for the website
+http
+  .createServer((req, res) => {
+    if (req.url === "/drivers.json") {
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*", // allow website fetch
+        "Cache-Control": "public, max-age=30",
+      });
+      return res.end(JSON.stringify(driverCountCache));
+    }
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Bot is alive");
+  })
+  .listen(process.env.PORT || 3000, "0.0.0.0", () => {
+    console.log(`HTTP server listening on ${process.env.PORT || 3000}`);
+  });
+
 function isAuthorized(member) {
   return member.roles.cache.some((r) => AUTHORIZED_ROLE_IDS.includes(r.id));
 }
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
 const SELF_URL = process.env.RENDER_EXTERNAL_URL;
 if (SELF_URL) {
   setInterval(() => {
-  http.get(SELF_URL).on("error", () => {});
+    http.get(SELF_URL).on("error", () => {});
   }, 4 * 60 * 1000);
 }
 
-// ——— Register slash command on ready ———
+// ——— Register slash command + start driver count refresh on ready ———
 client.once("ready", async () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
 
@@ -65,6 +112,10 @@ client.once("ready", async () => {
     body: [command.toJSON()],
   });
   console.log("Slash command registered.");
+
+  // Start driver count cache + refresh loop
+  await refreshDriverCount();
+  setInterval(refreshDriverCount, 60 * 1000); // every 60s
 });
 
 // ——— Interaction handler ———
@@ -83,7 +134,7 @@ client.on("interactionCreate", async (interaction) => {
           "• A reasonable amount of hours in ETS2\n" +
           "• Understood our policy on leaked mods"
       )
-      .setColor(0x2b6cb0);
+      .setColor(0x0035aa);
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -94,7 +145,10 @@ client.on("interactionCreate", async (interaction) => {
     );
 
     await interaction.channel.send({ embeds: [embed], components: [row] });
-    return interaction.reply({ content: "✅ Application panel posted!", ephemeral: true });
+    return interaction.reply({
+      content: "✅ Application panel posted!",
+      ephemeral: true,
+    });
   }
 
   // Apply button → show modal
@@ -168,7 +222,7 @@ client.on("interactionCreate", async (interaction) => {
 
     const embed = new EmbedBuilder()
       .setTitle("📋 New VTC Application")
-      .setColor(0x2b6cb0)
+      .setColor(0x0035aa)
       .setAuthor({
         name: interaction.user.tag,
         iconURL: interaction.user.displayAvatarURL(),
@@ -213,7 +267,11 @@ client.on("interactionCreate", async (interaction) => {
     const embed = EmbedBuilder.from(interaction.message.embeds[0])
       .setTitle("✅ Application ACCEPTED")
       .setColor(0x38a169)
-      .addFields({ name: "Reviewed by", value: `<@${interaction.user.id}>`, inline: false });
+      .addFields({
+        name: "Reviewed by",
+        value: `<@${interaction.user.id}>`,
+        inline: false,
+      });
 
     await interaction.message.edit({ embeds: [embed], components: [] });
 
@@ -223,6 +281,8 @@ client.on("interactionCreate", async (interaction) => {
       await applicant.send(
         "🎉 **Congratulations!** Your VTC application has been **accepted**! Welcome to the team!"
       );
+      // Refresh count immediately so the website updates promptly
+      refreshDriverCount();
     } catch (_) {}
 
     return interaction.reply({
@@ -267,7 +327,11 @@ client.on("interactionCreate", async (interaction) => {
     const embed = EmbedBuilder.from(msg.embeds[0])
       .setTitle("❌ Application DENIED")
       .setColor(0xe53e3e)
-      .addFields({ name: "Reviewed by", value: `<@${interaction.user.id}>`, inline: false });
+      .addFields({
+        name: "Reviewed by",
+        value: `<@${interaction.user.id}>`,
+        inline: false,
+      });
 
     if (reason) embed.addFields({ name: "Denial Reason", value: reason, inline: false });
 
@@ -284,6 +348,29 @@ client.on("interactionCreate", async (interaction) => {
       content: `Application for <@${applicantId}> denied.`,
       ephemeral: true,
     });
+  }
+});
+
+// Keep cache in sync when roles change (immediate, not waiting for the 60s tick)
+client.on("guildMemberUpdate", (oldMember, newMember) => {
+  if (newMember.guild.id !== GUILD_ID) return;
+  const oldHas = (id) => oldMember.roles.cache.has(id);
+  const newHas = (id) => newMember.roles.cache.has(id);
+  if (
+    oldHas(DRIVER_ROLE_ID) !== newHas(DRIVER_ROLE_ID) ||
+    oldHas(TRAINEE_ROLE_ID) !== newHas(TRAINEE_ROLE_ID)
+  ) {
+    refreshDriverCount();
+  }
+});
+
+client.on("guildMemberRemove", (member) => {
+  if (member.guild.id !== GUILD_ID) return;
+  if (
+    member.roles.cache.has(DRIVER_ROLE_ID) ||
+    member.roles.cache.has(TRAINEE_ROLE_ID)
+  ) {
+    refreshDriverCount();
   }
 });
 
