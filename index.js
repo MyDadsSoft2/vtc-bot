@@ -2,6 +2,7 @@ require("dotenv").config();
 const {
   Client,
   GatewayIntentBits,
+  ChannelType,
   SlashCommandBuilder,
   REST,
   Routes,
@@ -77,31 +78,60 @@ async function refreshDriverCount() {
 }
 
 // ====== FLEET SCRAPER ======
+function extractTrucksFromMessage(msg, threadName = null) {
+  const trucks = [];
+  for (const att of msg.attachments.values()) {
+    if (att.contentType && att.contentType.startsWith("image/")) {
+      trucks.push({
+        id: att.id,
+        url: att.url,
+        proxyUrl: att.proxyURL,
+        width: att.width,
+        height: att.height,
+        postedBy: msg.author.username,
+        postedAt: msg.createdAt.toISOString(),
+        messageId: msg.id,
+        threadName: threadName,
+      });
+    }
+  }
+  return trucks;
+}
+
 async function scrapeFleetChannel(channelId) {
   if (!channelId) return [];
   try {
     const channel = await client.channels.fetch(channelId);
     if (!channel) return [];
-    const messages = await channel.messages.fetch({ limit: FLEET_FETCH_LIMIT });
 
-    const trucks = [];
-    for (const msg of messages.values()) {
-      // Each image attachment = one truck entry
-      for (const att of msg.attachments.values()) {
-        if (att.contentType && att.contentType.startsWith("image/")) {
-          trucks.push({
-            id: att.id,
-            url: att.url, // signed Discord CDN URL — refreshed on every scrape
-            proxyUrl: att.proxyURL,
-            width: att.width,
-            height: att.height,
-            postedBy: msg.author.username,
-            postedAt: msg.createdAt.toISOString(),
-            messageId: msg.id,
-          });
+    let trucks = [];
+
+    // Forum channel — iterate threads (posts), pull images from each
+    if (channel.type === ChannelType.GuildForum || channel.type === ChannelType.GuildMedia) {
+      const active = await channel.threads.fetchActive().catch(() => ({ threads: new Map() }));
+      const archived = await channel.threads.fetchArchived({ limit: 50 }).catch(() => ({ threads: new Map() }));
+
+      const allThreads = [...active.threads.values(), ...archived.threads.values()];
+
+      for (const thread of allThreads) {
+        try {
+          // Fetch first batch of messages in the thread — the starter post is usually here
+          const msgs = await thread.messages.fetch({ limit: 20 });
+          for (const msg of msgs.values()) {
+            trucks.push(...extractTrucksFromMessage(msg, thread.name));
+          }
+        } catch (err) {
+          console.warn(`[fleet] thread ${thread.id} fetch failed:`, err.message);
         }
       }
+    } else {
+      // Regular text channel
+      const messages = await channel.messages.fetch({ limit: FLEET_FETCH_LIMIT });
+      for (const msg of messages.values()) {
+        trucks.push(...extractTrucksFromMessage(msg));
+      }
     }
+
     // Newest first
     trucks.sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
     return trucks;
@@ -440,15 +470,37 @@ client.on("guildMemberRemove", (member) => {
   }
 });
 
-// Refresh fleet immediately on new posts to the fleet channels
+// Refresh fleet on new posts to the fleet channels (text or forum threads)
+function isFleetChannel(msg) {
+  if (!msg.channel) return false;
+  const cid = msg.channel.id;
+  const parentId = msg.channel.parentId || null;
+  return (
+    cid === SCOTTS_FLEET_CHANNEL_ID ||
+    cid === KJ_FLEET_CHANNEL_ID ||
+    parentId === SCOTTS_FLEET_CHANNEL_ID ||
+    parentId === KJ_FLEET_CHANNEL_ID
+  );
+}
+
 client.on("messageCreate", (msg) => {
-  if (msg.channelId === SCOTTS_FLEET_CHANNEL_ID || msg.channelId === KJ_FLEET_CHANNEL_ID) {
-    if (msg.attachments.size > 0) refreshFleet();
-  }
+  if (isFleetChannel(msg) && msg.attachments.size > 0) refreshFleet();
 });
 
 client.on("messageDelete", (msg) => {
-  if (msg.channelId === SCOTTS_FLEET_CHANNEL_ID || msg.channelId === KJ_FLEET_CHANNEL_ID) {
+  if (isFleetChannel(msg)) refreshFleet();
+});
+
+// Forum: new thread / post created
+client.on("threadCreate", (thread) => {
+  if (thread.parentId === SCOTTS_FLEET_CHANNEL_ID || thread.parentId === KJ_FLEET_CHANNEL_ID) {
+    // small delay so the starter message lands first
+    setTimeout(refreshFleet, 2000);
+  }
+});
+
+client.on("threadDelete", (thread) => {
+  if (thread.parentId === SCOTTS_FLEET_CHANNEL_ID || thread.parentId === KJ_FLEET_CHANNEL_ID) {
     refreshFleet();
   }
 });
