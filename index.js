@@ -102,37 +102,60 @@ async function scrapeFleetChannel(channelId) {
   if (!channelId) return [];
   try {
     const channel = await client.channels.fetch(channelId);
-    if (!channel) return [];
+    if (!channel) {
+      console.warn(`[fleet] channel ${channelId} not found / bot has no access`);
+      return [];
+    }
+
+    console.log(`[fleet] channel ${channelId} → type=${channel.type} name=${channel.name || "?"}`);
 
     let trucks = [];
+    const isForum =
+      channel.type === ChannelType.GuildForum ||
+      channel.type === ChannelType.GuildMedia ||
+      channel.type === 15 || // GuildForum
+      channel.type === 16;   // GuildMedia
 
-    // Forum channel — iterate threads (posts), pull images from each
-    if (channel.type === ChannelType.GuildForum || channel.type === ChannelType.GuildMedia) {
-      const active = await channel.threads.fetchActive().catch(() => ({ threads: new Map() }));
-      const archived = await channel.threads.fetchArchived({ limit: 50 }).catch(() => ({ threads: new Map() }));
+    // Forum / media channel — iterate threads (posts)
+    if (isForum) {
+      if (!channel.threads) {
+        console.warn(`[fleet] forum channel ${channelId} has no .threads manager — bot likely missing 'View Channel' / 'Read Message History' permission`);
+        return [];
+      }
+
+      const active = await channel.threads.fetchActive().catch((e) => {
+        console.warn(`[fleet] fetchActive failed:`, e.message);
+        return { threads: new Map() };
+      });
+      const archived = await channel.threads.fetchArchived({ limit: 50 }).catch((e) => {
+        console.warn(`[fleet] fetchArchived failed:`, e.message);
+        return { threads: new Map() };
+      });
 
       const allThreads = [...active.threads.values(), ...archived.threads.values()];
+      console.log(`[fleet] forum ${channelId} → ${allThreads.length} threads`);
 
       for (const thread of allThreads) {
         try {
-          // Fetch first batch of messages in the thread — the starter post is usually here
           const msgs = await thread.messages.fetch({ limit: 20 });
           for (const msg of msgs.values()) {
             trucks.push(...extractTrucksFromMessage(msg, thread.name));
           }
         } catch (err) {
-          console.warn(`[fleet] thread ${thread.id} fetch failed:`, err.message);
+          console.warn(`[fleet] thread ${thread.id} (${thread.name}) fetch failed:`, err.message);
         }
       }
-    } else {
+    } else if (channel.messages) {
       // Regular text channel
       const messages = await channel.messages.fetch({ limit: FLEET_FETCH_LIMIT });
       for (const msg of messages.values()) {
         trucks.push(...extractTrucksFromMessage(msg));
       }
+    } else {
+      console.warn(`[fleet] channel ${channelId} is type ${channel.type} — unsupported`);
+      return [];
     }
 
-    // Newest first
     trucks.sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
     return trucks;
   } catch (err) {
