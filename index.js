@@ -24,15 +24,29 @@ const AUTHORIZED_ROLE_IDS = [
   "1387903334744064173", // Owner role
 ];
 
-// ====== DRIVER COUNT CONFIG (new) ======
+// ====== DRIVER COUNT CONFIG ======
 const GUILD_ID = "1387897307361575215";
 const DRIVER_ROLE_ID = "1387898569779839127";
 const TRAINEE_ROLE_ID = "1431731010810413157";
+
+// ====== FLEET CONFIG ======
+// Set these in your environment (Fly secrets):
+//   SCOTTS_FLEET_CHANNEL_ID = channel ID in Scott's server for Scott's truck pics
+//   KJ_FLEET_CHANNEL_ID     = channel ID in Scott's server for KJ truck pics
+const SCOTTS_FLEET_CHANNEL_ID = process.env.SCOTTS_FLEET_CHANNEL_ID;
+const KJ_FLEET_CHANNEL_ID = process.env.KJ_FLEET_CHANNEL_ID;
+const FLEET_FETCH_LIMIT = 50; // most recent N messages per channel
 
 let driverCountCache = {
   drivers: 0,
   trainees: 0,
   total: 0,
+  updated: null,
+};
+
+let fleetCache = {
+  scotts: [],
+  kj: [],
   updated: null,
 };
 
@@ -43,7 +57,6 @@ async function refreshDriverCount() {
       console.warn("[drivers] Guild not in cache, skipping refresh");
       return;
     }
-    // Pull all members so role.members is fully populated
     await guild.members.fetch();
 
     const driverRole = guild.roles.cache.get(DRIVER_ROLE_ID);
@@ -57,26 +70,82 @@ async function refreshDriverCount() {
       total: drivers + trainees,
       updated: new Date().toISOString(),
     };
-    console.log(
-      `[drivers] Refreshed: ${drivers} drivers, ${trainees} trainees`
-    );
+    console.log(`[drivers] Refreshed: ${drivers} drivers, ${trainees} trainees`);
   } catch (err) {
     console.error("[drivers] Refresh failed:", err);
   }
 }
 
+// ====== FLEET SCRAPER ======
+async function scrapeFleetChannel(channelId) {
+  if (!channelId) return [];
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel) return [];
+    const messages = await channel.messages.fetch({ limit: FLEET_FETCH_LIMIT });
+
+    const trucks = [];
+    for (const msg of messages.values()) {
+      // Each image attachment = one truck entry
+      for (const att of msg.attachments.values()) {
+        if (att.contentType && att.contentType.startsWith("image/")) {
+          trucks.push({
+            id: att.id,
+            url: att.url, // signed Discord CDN URL — refreshed on every scrape
+            proxyUrl: att.proxyURL,
+            width: att.width,
+            height: att.height,
+            postedBy: msg.author.username,
+            postedAt: msg.createdAt.toISOString(),
+            messageId: msg.id,
+          });
+        }
+      }
+    }
+    // Newest first
+    trucks.sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
+    return trucks;
+  } catch (err) {
+    console.error(`[fleet] scrape failed for ${channelId}:`, err.message);
+    return [];
+  }
+}
+
+async function refreshFleet() {
+  try {
+    const [scotts, kj] = await Promise.all([
+      scrapeFleetChannel(SCOTTS_FLEET_CHANNEL_ID),
+      scrapeFleetChannel(KJ_FLEET_CHANNEL_ID),
+    ]);
+    fleetCache = {
+      scotts,
+      kj,
+      updated: new Date().toISOString(),
+    };
+    console.log(`[fleet] Refreshed: ${scotts.length} Scott's, ${kj.length} KJ`);
+  } catch (err) {
+    console.error("[fleet] Refresh failed:", err);
+  }
+}
+
 // ====== HTTP SERVER ======
-// Health check + /drivers.json endpoint for the website
 http
   .createServer((req, res) => {
+    const cors = {
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "public, max-age=30",
+    };
+
     if (req.url === "/drivers.json") {
-      res.writeHead(200, {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*", // allow website fetch
-        "Cache-Control": "public, max-age=30",
-      });
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
       return res.end(JSON.stringify(driverCountCache));
     }
+
+    if (req.url === "/fleet.json") {
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
+      return res.end(JSON.stringify(fleetCache));
+    }
+
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("Bot is alive");
   })
@@ -89,7 +158,11 @@ function isAuthorized(member) {
 }
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+  ],
 });
 
 const SELF_URL = process.env.RENDER_EXTERNAL_URL;
@@ -99,7 +172,6 @@ if (SELF_URL) {
   }, 4 * 60 * 1000);
 }
 
-// ——— Register slash command + start driver count refresh on ready ———
 client.once("ready", async () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
 
@@ -113,14 +185,15 @@ client.once("ready", async () => {
   });
   console.log("Slash command registered.");
 
-  // Start driver count cache + refresh loop
   await refreshDriverCount();
-  setInterval(refreshDriverCount, 60 * 1000); // every 60s
+  setInterval(refreshDriverCount, 60 * 1000);
+
+  // Fleet refresh — every 10 minutes (Discord CDN URLs are valid ~24h, plenty of buffer)
+  await refreshFleet();
+  setInterval(refreshFleet, 10 * 60 * 1000);
 });
 
-// ——— Interaction handler ———
 client.on("interactionCreate", async (interaction) => {
-  // /setup command
   if (interaction.isChatInputCommand() && interaction.commandName === "setup") {
     if (!isAuthorized(interaction.member))
       return interaction.reply({ content: "No permission.", ephemeral: true });
@@ -151,7 +224,6 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  // Apply button → show modal
   if (interaction.isButton() && interaction.customId === "vtc_apply") {
     const modal = new ModalBuilder()
       .setCustomId("vtc_modal")
@@ -205,7 +277,6 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.showModal(modal);
   }
 
-  // Modal submit → post application
   if (interaction.isModalSubmit() && interaction.customId === "vtc_modal") {
     const age = interaction.fields.getTextInputValue("age");
     const hours = interaction.fields.getTextInputValue("hours");
@@ -258,7 +329,6 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  // Accept button
   if (interaction.isButton() && interaction.customId.startsWith("accept_")) {
     if (!isAuthorized(interaction.member))
       return interaction.reply({ content: "No permission.", ephemeral: true });
@@ -277,11 +347,10 @@ client.on("interactionCreate", async (interaction) => {
 
     try {
       const applicant = await interaction.guild.members.fetch(applicantId);
-      await applicant.roles.add("1431731010810413157"); // Trainee Driver role
+      await applicant.roles.add("1431731010810413157");
       await applicant.send(
         "🎉 **Congratulations!** Your VTC application has been **accepted**! Welcome to the team!"
       );
-      // Refresh count immediately so the website updates promptly
       refreshDriverCount();
     } catch (_) {}
 
@@ -291,7 +360,6 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  // Deny button → show reason modal
   if (interaction.isButton() && interaction.customId.startsWith("deny_")) {
     if (!isAuthorized(interaction.member))
       return interaction.reply({ content: "No permission.", ephemeral: true });
@@ -314,9 +382,8 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.showModal(modal);
   }
 
-  // Deny reason modal submit
   if (interaction.isModalSubmit() && interaction.customId.startsWith("deny_reason_")) {
-    const parts = interaction.customId.split("_"); // deny_reason_USERID_MSGID
+    const parts = interaction.customId.split("_");
     const applicantId = parts[2];
     const messageId = parts[3];
     const reason = interaction.fields.getTextInputValue("deny_reason");
@@ -351,7 +418,6 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// Keep cache in sync when roles change (immediate, not waiting for the 60s tick)
 client.on("guildMemberUpdate", (oldMember, newMember) => {
   if (newMember.guild.id !== GUILD_ID) return;
   const oldHas = (id) => oldMember.roles.cache.has(id);
@@ -371,6 +437,19 @@ client.on("guildMemberRemove", (member) => {
     member.roles.cache.has(TRAINEE_ROLE_ID)
   ) {
     refreshDriverCount();
+  }
+});
+
+// Refresh fleet immediately on new posts to the fleet channels
+client.on("messageCreate", (msg) => {
+  if (msg.channelId === SCOTTS_FLEET_CHANNEL_ID || msg.channelId === KJ_FLEET_CHANNEL_ID) {
+    if (msg.attachments.size > 0) refreshFleet();
+  }
+});
+
+client.on("messageDelete", (msg) => {
+  if (msg.channelId === SCOTTS_FLEET_CHANNEL_ID || msg.channelId === KJ_FLEET_CHANNEL_ID) {
+    refreshFleet();
   }
 });
 
