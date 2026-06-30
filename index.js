@@ -25,6 +25,13 @@ const AUTHORIZED_ROLE_IDS = [
   "1387903334744064173", // Owner role
 ];
 
+// ====== DON'T TYPE CHANNEL CONFIG ======
+const DONT_TYPE_CHANNEL_ID = "1521598265215160360";
+const DONT_TYPE_NOTICE =
+  "🚫 **DON'T TYPE CHANNEL**\n\n" +
+  "This channel is here as an anti-scammer trap. Anyone who posts messages, images, links, or attachments here will be automatically banned.\n\n" +
+  "Staff: do not test this unless you know you are exempt.";
+
 // ====== DRIVER COUNT CONFIG ======
 const GUILD_ID = "1387897307361575215";
 const DRIVER_ROLE_ID = "1387898569779839127";
@@ -225,6 +232,32 @@ if (SELF_URL) {
   }, 4 * 60 * 1000);
 }
 
+async function postDontTypeNotice() {
+  try {
+    const channel = await client.channels.fetch(DONT_TYPE_CHANNEL_ID);
+
+    if (!channel || !channel.isTextBased()) {
+      console.warn("[dont-type] Channel not found or is not text based");
+      return;
+    }
+
+    const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+
+    const alreadyPosted = recentMessages?.some(
+      (m) =>
+        m.author.id === client.user.id &&
+        m.content.includes("DON'T TYPE CHANNEL")
+    );
+
+    if (alreadyPosted) return;
+
+    const notice = await channel.send(DONT_TYPE_NOTICE);
+    await notice.pin().catch(() => {});
+  } catch (err) {
+    console.error("[dont-type] Failed to post notice:", err.message);
+  }
+}
+
 client.once("ready", async () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
 
@@ -244,6 +277,8 @@ client.once("ready", async () => {
   // Fleet refresh — every 10 minutes (Discord CDN URLs are valid ~24h, plenty of buffer)
   await refreshFleet();
   setInterval(refreshFleet, 10 * 60 * 1000);
+
+  await postDontTypeNotice();
 });
 
 client.on("interactionCreate", async (interaction) => {
@@ -506,7 +541,33 @@ function isFleetChannel(msg) {
   );
 }
 
-client.on("messageCreate", (msg) => {
+client.on("messageCreate", async (msg) => {
+  if (!msg.guild || msg.author.bot) return;
+
+  // Anti-scammer don't-type channel
+  if (msg.channelId === DONT_TYPE_CHANNEL_ID) {
+    // Staff bypass so owners/co-owners do not accidentally ban themselves
+    if (msg.member && isAuthorized(msg.member)) return;
+
+    const reason = `Posted in don't-type anti-scam channel: ${DONT_TYPE_CHANNEL_ID}`;
+
+    await msg.delete().catch(() => {});
+
+    try {
+      await msg.member.ban({
+        reason,
+        deleteMessageSeconds: 60 * 60,
+      });
+
+      console.log(`[dont-type] Banned ${msg.author.tag} (${msg.author.id})`);
+    } catch (err) {
+      console.error(`[dont-type] Failed to ban ${msg.author.tag}:`, err.message);
+    }
+
+    return;
+  }
+
+  // Keep your existing fleet refresh behaviour
   if (isFleetChannel(msg) && msg.attachments.size > 0) refreshFleet();
 });
 
