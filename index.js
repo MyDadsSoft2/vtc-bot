@@ -236,28 +236,30 @@ if (SELF_URL) {
 }
 
 async function postDontTypeNotice() {
-  try {
-    const channel = await client.channels.fetch(DONT_TYPE_CHANNEL_ID);
+  for (const channelId of DONT_TYPE_CHANNEL_IDS) {
+    try {
+      const channel = await client.channels.fetch(channelId);
 
-    if (!channel || !channel.isTextBased()) {
-      console.warn("[dont-type] Channel not found or is not text based");
-      return;
+      if (!channel || !channel.isTextBased()) {
+        console.warn(`[dont-type] Channel ${channelId} not found or is not text based`);
+        continue;
+      }
+
+      const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+
+      const alreadyPosted = recentMessages?.some(
+        (m) =>
+          m.author.id === client.user.id &&
+          m.content.includes("Don't Type In Here")
+      );
+
+      if (alreadyPosted) continue;
+
+      const notice = await channel.send(DONT_TYPE_NOTICE);
+      await notice.pin().catch(() => {});
+    } catch (err) {
+      console.error(`[dont-type] Failed to post notice in ${channelId}:`, err.message);
     }
-
-    const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
-
-    const alreadyPosted = recentMessages?.some(
-      (m) =>
-        m.author.id === client.user.id &&
-        m.content.includes("DON'T TYPE CHANNEL")
-    );
-
-    if (alreadyPosted) return;
-
-    const notice = await channel.send(DONT_TYPE_NOTICE);
-    await notice.pin().catch(() => {});
-  } catch (err) {
-    console.error("[dont-type] Failed to post notice:", err.message);
   }
 }
 
@@ -547,12 +549,12 @@ function isFleetChannel(msg) {
 client.on("messageCreate", async (msg) => {
   if (!msg.guild || msg.author.bot) return;
 
-  // Anti-scammer don't-type channel
-  if (msg.channelId === DONT_TYPE_CHANNEL_ID) {
+  // Anti-scammer don't-type channel(s)
+  if (DONT_TYPE_CHANNEL_IDS.includes(msg.channelId)) {
     // Staff bypass so owners/co-owners do not accidentally ban themselves
     if (msg.member && isAuthorized(msg.member)) return;
 
-    const reason = `Posted in don't-type anti-scam channel: ${DONT_TYPE_CHANNEL_ID}`;
+    const reason = `Posted in don't-type anti-scam channel: ${msg.channelId}`;
 
     await msg.delete().catch(() => {});
 
