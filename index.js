@@ -549,30 +549,43 @@ function isFleetChannel(msg) {
 client.on("messageCreate", async (msg) => {
   if (!msg.guild || msg.author.bot) return;
 
-  // Anti-scammer don't-type channel(s)
   if (DONT_TYPE_CHANNEL_IDS.includes(msg.channelId)) {
-    // Staff bypass so owners/co-owners do not accidentally ban themselves
-    if (msg.member && isAuthorized(msg.member)) return;
+    // Make sure we actually have a GuildMember to check/ban
+    let member = msg.member;
+    if (!member) {
+      member = await msg.guild.members.fetch(msg.author.id).catch(() => null);
+    }
+
+    if (!member) {
+      console.error(`[dont-type] Could not resolve member for ${msg.author.tag} (${msg.author.id}) — cannot ban`);
+      await msg.delete().catch((e) => console.error("[dont-type] delete failed:", e.message));
+      return;
+    }
+
+    // Staff bypass
+    if (isAuthorized(member)) return;
 
     const reason = `Posted in don't-type anti-scam channel: ${msg.channelId}`;
 
-    await msg.delete().catch(() => {});
+    const deleted = await msg.delete().catch((e) => {
+      console.error(`[dont-type] Delete failed for ${msg.id}:`, e.message);
+      return null;
+    });
 
     try {
-      await msg.member.ban({
+      await member.ban({
         reason,
         deleteMessageSeconds: 60 * 60,
       });
-
       console.log(`[dont-type] Banned ${msg.author.tag} (${msg.author.id})`);
     } catch (err) {
-      console.error(`[dont-type] Failed to ban ${msg.author.tag}:`, err.message);
+      // This is the line to watch — it'll tell you exactly why
+      console.error(`[dont-type] Failed to ban ${msg.author.tag} (${msg.author.id}):`, err.code, err.message);
     }
 
     return;
   }
 
-  // Keep your existing fleet refresh behaviour
   if (isFleetChannel(msg) && msg.attachments.size > 0) refreshFleet();
 });
 
