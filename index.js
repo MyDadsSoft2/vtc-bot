@@ -25,13 +25,15 @@ const AUTHORIZED_ROLE_IDS = [
   "1387903334744064173", // Owner role
 ];
 
-// ====== DON'T TYPE CHANNEL CONFIG ======
-const DONT_TYPE_CHANNEL_ID = "1521598265215160360";
-const DONT_TYPE_CHANNEL_ID = "1523039124586758244";
+const DONT_TYPE_CHANNEL_IDS = [
+  "1521598265215160360",
+  "1523039124586758244"
+];
+
 const DONT_TYPE_NOTICE =
   "**Don't Type In Here**\n\n" +
-  "sending anything Images or gif / messages in this channel will isnta ban you .\n\n" +
-  "Warning This will ban staff aswell.";
+  "Sending any images, GIFs, or messages in this channel will result in an instant ban.\n\n" +
+  "Warning: This also applies to staff.";
 
 // ====== DRIVER COUNT CONFIG ======
 const GUILD_ID = "1387897307361575215";
