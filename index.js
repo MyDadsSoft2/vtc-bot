@@ -27,10 +27,11 @@ const AUTHORIZED_ROLE_IDS = [
 
 // ====== DON'T TYPE CHANNEL CONFIG ======
 const DONT_TYPE_CHANNEL_ID = "1521598265215160360";
+const DONT_TYPE_CHANNEL_ID = "1523039124586758244";
 const DONT_TYPE_NOTICE =
-  "**TYPE MODS**\n\n" +
-  "Type mods and you will get a dm from the bot with mods.\n\n" +
-  "Warning Some Are paid.";
+  "**Don't Type In Here**\n\n" +
+  "sending anything Images or gif / messages in this channel will isnta ban you .\n\n" +
+  "Warning This will ban staff aswell.";
 
 // ====== DRIVER COUNT CONFIG ======
 const GUILD_ID = "1387897307361575215";
