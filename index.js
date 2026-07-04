@@ -30,6 +30,10 @@ const DONT_TYPE_CHANNEL_IDS = [
   "1523039124586758244"
 ];
 
+const DONT_TYPE_EXEMPT_ROLE_IDS = [
+  "931691792544432211",
+];
+
 const DONT_TYPE_NOTICE =
   "**Don't Type In Here**\n\n" +
   "Sending any images, GIFs, or messages in this channel will result in an instant ban.\n\n" +
@@ -550,7 +554,6 @@ client.on("messageCreate", async (msg) => {
   if (!msg.guild || msg.author.bot) return;
 
   if (DONT_TYPE_CHANNEL_IDS.includes(msg.channelId)) {
-    // Make sure we actually have a GuildMember to check/ban
     let member = msg.member;
     if (!member) {
       member = await msg.guild.members.fetch(msg.author.id).catch(() => null);
@@ -562,15 +565,17 @@ client.on("messageCreate", async (msg) => {
       return;
     }
 
-    // Staff bypass
-    if (isAuthorized(member)) return;
+    // Staff bypass + exempt role bypass — no delete, no ban
+    if (
+      isAuthorized(member) ||
+      member.roles.cache.some((r) => DONT_TYPE_EXEMPT_ROLE_IDS.includes(r.id))
+    ) {
+      return;
+    }
 
     const reason = `Posted in don't-type anti-scam channel: ${msg.channelId}`;
 
-    const deleted = await msg.delete().catch((e) => {
-      console.error(`[dont-type] Delete failed for ${msg.id}:`, e.message);
-      return null;
-    });
+    await msg.delete().catch((e) => console.error("[dont-type] delete failed:", e.message));
 
     try {
       await member.ban({
@@ -579,7 +584,6 @@ client.on("messageCreate", async (msg) => {
       });
       console.log(`[dont-type] Banned ${msg.author.tag} (${msg.author.id})`);
     } catch (err) {
-      // This is the line to watch — it'll tell you exactly why
       console.error(`[dont-type] Failed to ban ${msg.author.tag} (${msg.author.id}):`, err.code, err.message);
     }
 
