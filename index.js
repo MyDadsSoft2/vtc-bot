@@ -354,7 +354,7 @@ client.on("interactionCreate", async (interaction) => {
         ),
         new ActionRowBuilder().addComponents(
           new TextInputBuilder()
-            .setCustomId("rule9")
+            .setCustomId("rule7")
             .setLabel("Have you read the rules? What is Rule 9?")
             .setStyle(TextInputStyle.Paragraph)
             .setMaxLength(500)
